@@ -1,0 +1,3 @@
+# Tone homophones that can flip the meaning. prepare.py flags them, it never changes them.
+# Format: word<TAB>heard as<TAB>note
+နည်း	နီး	use လျော့ when you mean "fewer/down by"
