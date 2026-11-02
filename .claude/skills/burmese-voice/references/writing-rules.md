@@ -40,6 +40,6 @@ Burmese reads slow. `prepare.py` estimates length from characters (about 1,000 c
 
 ## 6. Lexicon and homophones
 
-`lexicon.tsv`: some words must be written the way they sound, not the dictionary spelling, or v4 misreads them. Example: v4 read သန်းရာချီ as a number, so it is written သန်းပေါင်းရာချီ. Add your own only after testing in your voice. Invented entries are dangerous.
+`lexicon.tsv`: some words must be written the way they sound, not the dictionary spelling, or v4 misreads them. Example: v4 read သန်းရာချီ as a number, so it is written သန်းပေါင်းရာချီ. Always write နဲ instead of နည်း: v4 only pronounces it right in the spoken spelling (this one is a native speaker's rule, and it covers words like နည်းနည်း too). Add your own only after testing in your voice. Invented entries are dangerous.
 
-`homophones.tsv`: tone homophones can flip the meaning. Example: နည်း ("fewer") was heard by listeners and checkers as နီး ("near"). Use လျော့ when you mean "fewer" or "down by". `prepare.py` flags every match for you to decide, it never rewrites them.
+`homophones.tsv`: tone homophones can flip the meaning. Add the pairs you find; `prepare.py` flags every match for you to decide, it never rewrites them.
