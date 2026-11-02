@@ -27,3 +27,5 @@ Raw generations stay in `work/raw/`. `join.py cut` always reads from the raw fil
 
 - Check the last 3 seconds of the final file: no doubled word, no stray tail, no clipped end.
 - Listen to the whole thing once on a phone speaker.
+
+A long single take (anything sent as one big call) can loop a whole stretch 30 s or more later. The default scan only looks 12 s back, which is right for short kit paragraphs; on a long take run `scan_repeats.py --max-offset 60`.

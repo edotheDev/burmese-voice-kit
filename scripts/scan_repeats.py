@@ -59,7 +59,7 @@ def merge(hits, t_gap=0.6, lag_gap=0.3):
     return sorted(out, key=lambda o: o["t0"])
 
 
-def scan_file(path, rep_thr, sus_thr):
+def scan_file(path, rep_thr, sus_thr, max_off=None):
     """Diagonal-stripe search on a frame-level self-similarity matrix.
 
     A loop is the same audio again L seconds later, so frame t matches frame
@@ -75,7 +75,7 @@ def scan_file(path, rep_thr, sus_thr):
     res = {"duration": dur, "repeat": [], "suspect": []}
     F, act = frames(y)
     n, W = F.shape[1], int(WIN_S * SR / HOP)
-    lo, hi = int(MIN_OFF * SR / HOP), int(MAX_OFF * SR / HOP)
+    lo, hi = int(MIN_OFF * SR / HOP), int((max_off or MAX_OFF) * SR / HOP)
     k = np.ones(W)
     rep, sus = [], []
     for L in range(lo, min(hi, n - W) + 1):
@@ -114,6 +114,8 @@ def main():
     ap.add_argument("inputs", nargs="*", help="mp3 files or a work folder (default: work)")
     ap.add_argument("--repeat", type=float, default=0.72, help="stripe similarity for REPEAT (default 0.72)")
     ap.add_argument("--suspect", type=float, default=0.64, help="lower bound for SUSPECT (default 0.64)")
+    ap.add_argument("--max-offset", type=float, default=MAX_OFF,
+                    help="look this many seconds back for a repeat (default 12; use 60+ on a long single take, it is slower)")
     ap.add_argument("--silence-db", type=float, default=-60, help="deep silence level in dB (default -60)")
     ap.add_argument("--silence-min", type=float, default=0.25, help="min silence length in s (default 0.25)")
     args = ap.parse_args()
@@ -136,7 +138,7 @@ def main():
 
     bad = 0
     for f in files:
-        r = scan_file(f, args.repeat, args.suspect)
+        r = scan_file(f, args.repeat, args.suspect, args.max_offset)
         status = "REPEAT" if r["repeat"] else ("suspect" if r["suspect"] else "clean")
         print(f"{f.name}  {r['duration']:.1f}s  {status}")
         for h in r["repeat"]:
