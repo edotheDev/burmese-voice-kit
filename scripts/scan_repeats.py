@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Detect looped / duplicated stretches in generated mp3 files.
 
-Decodes each file with ffmpeg to 16 kHz mono, computes MFCCs, and compares
-every 1.2 s window with windows 1.5 to 12 s later (cosine similarity).
-  > 0.80            -> REPEAT
-  0.70 to 0.80      -> SUSPECT, only at a sentence length offset (2 to 8 s)
+Decodes each file with ffmpeg to 16 kHz mono, computes a MFCC vector per
+10 ms frame, and looks for diagonal stripes: stretches of at least 1.2 s that
+come back 1.5 to 12 s later.
+  >= 0.72           -> REPEAT  (known real loops scored 0.80 to 0.83)
+  0.64 to 0.72      -> SUSPECT (clean takes scored up to 0.62)
 Also lists deep silences (below -60 dB, 0.25 s or longer) as cut candidates.
 
-Note: a script's own repeated words score around 0.75, so every SUSPECT
-needs your ears. REPEAT hits are almost always real.
+Every SUSPECT needs your ears. A script that really says the same phrase
+twice will also show up, so check hits against the text.
 """
 import argparse
 import re
@@ -17,11 +18,9 @@ import sys
 from pathlib import Path
 
 SR = 16000
-HOP = 160            # 10 ms
-WIN_S = 1.2
-STEP_S = 0.3
+HOP = 160            # 10 ms frames
+WIN_S = 1.2          # a match must hold for this long along the diagonal
 MIN_OFF, MAX_OFF = 1.5, 12.0
-SENT_OFF = (2.0, 8.0)
 
 
 def decode(path):
@@ -33,66 +32,64 @@ def decode(path):
     return np.frombuffer(p.stdout, dtype=np.float32)
 
 
-def windows(y):
+def frames(y):
+    """Unit-norm MFCC vector per 10 ms frame, plus a voiced mask."""
     import librosa
     import numpy as np
-    mf = librosa.feature.mfcc(y=y, sr=SR, n_mfcc=20, hop_length=HOP, n_fft=512)
-    mf = mf[1:]  # drop energy-like c0
+    mf = librosa.feature.mfcc(y=y, sr=SR, n_mfcc=20, hop_length=HOP, n_fft=512)[1:]  # drop c0
     mf = (mf - mf.mean(axis=1, keepdims=True)) / (mf.std(axis=1, keepdims=True) + 1e-8)
-    rms = librosa.feature.rms(y=y, hop_length=HOP, frame_length=512)[0]
-    wf, step = int(WIN_S * SR / HOP), int(STEP_S * SR / HOP)
-    vecs, times, keep = [], [], []
-    for s in range(0, mf.shape[1] - wf, step):
-        v = mf[:, s:s + wf].flatten()
-        vecs.append(v / (np.linalg.norm(v) + 1e-8))
-        times.append(s * HOP / SR)
-        keep.append(rms[s:s + wf].mean() > 0.01)  # skip near silent windows
-    return np.array(vecs), np.array(times), np.array(keep)
+    F = mf / (np.linalg.norm(mf, axis=0, keepdims=True) + 1e-8)
+    rms = librosa.feature.rms(y=y, hop_length=HOP, frame_length=512)[0][:F.shape[1]]
+    return F, rms > 0.01
 
 
-def merge(hits, gap=0.35):
-    """hits: list of (a_start, b_start, sim). Merge neighbours into ranges."""
+def merge(hits, t_gap=0.6, lag_gap=0.3):
+    """hits: (t, lag, sim). Group hits that sit on the same stripe."""
     hits.sort()
     out = []
-    for a, b, s in hits:
-        if out and a - out[-1]["a1"] <= gap + 0.3:
-            o = out[-1]
-            o["a1"] = max(o["a1"], a)
-            o["b0"], o["b1"] = min(o["b0"], b), max(o["b1"], b)
-            o["sim"] = max(o["sim"], s)
+    for t, lag, s in hits:
+        for o in out:
+            if t - o["t1"] <= t_gap and abs(lag - o["lag"]) <= lag_gap:
+                o["t1"] = t
+                if s > o["sim"]:
+                    o["sim"], o["lag"] = s, lag
+                break
         else:
-            out.append({"a0": a, "a1": a, "b0": b, "b1": b, "sim": s})
-    return out
+            out.append({"t0": t, "t1": t, "lag": lag, "sim": s})
+    return sorted(out, key=lambda o: o["t0"])
 
 
 def scan_file(path, rep_thr, sus_thr):
+    """Diagonal-stripe search on a frame-level self-similarity matrix.
+
+    A loop is the same audio again L seconds later, so frame t matches frame
+    t+L for a whole stretch. For every lag L (1.5 to 12 s) we average the
+    frame similarity over a sliding 1.2 s run. Frame level (not window
+    vectors) keeps re-spoken copies with small timing drift from slipping
+    through. Calibrated on real Eleven v4 Burmese takes: three known loops
+    scored 0.80 to 0.83, clean takes 0.37 to 0.62.
+    """
     import numpy as np
     y = decode(path)
     dur = len(y) / SR
-    V, T, K = windows(y)
     res = {"duration": dur, "repeat": [], "suspect": []}
-    if len(V) < 3:
-        return res
-    S = V @ V.T
+    F, act = frames(y)
+    n, W = F.shape[1], int(WIN_S * SR / HOP)
+    lo, hi = int(MIN_OFF * SR / HOP), int(MAX_OFF * SR / HOP)
+    k = np.ones(W)
     rep, sus = [], []
-    for i in range(len(V)):
-        if not K[i]:
-            continue
-        for j in range(i + 1, len(V)):
-            off = T[j] - T[i]
-            if off < MIN_OFF:
-                continue
-            if off > MAX_OFF:
-                break
-            if not K[j]:
-                continue
-            s = float(S[i, j])
-            if s > rep_thr:
-                rep.append((float(T[i]), float(T[j]), s))
-            elif s > sus_thr and SENT_OFF[0] <= off <= SENT_OFF[1]:
-                sus.append((float(T[i]), float(T[j]), s))
+    for L in range(lo, min(hi, n - W) + 1):
+        d = np.einsum("ij,ij->j", F[:, :n - L], F[:, L:])
+        a = (act[:n - L] & act[L:]).astype(float)
+        den = np.convolve(a, k, "valid")
+        m = np.where(den > W * 0.6, np.convolve(d * a, k, "valid") / np.maximum(den, 1), 0.0)
+        for i in np.flatnonzero(m > sus_thr)[::5]:  # every 50 ms is enough
+            hit = (i * HOP / SR, L * HOP / SR, float(m[i]))
+            (rep if m[i] > rep_thr else sus).append(hit)
     res["repeat"] = merge(rep)
-    res["suspect"] = merge(sus)
+    rep_spans = [(o["t0"], o["t1"] + o["lag"] + WIN_S) for o in res["repeat"]]
+    res["suspect"] = [o for o in merge(sus)
+                      if not any(a <= o["t0"] <= b for a, b in rep_spans)]
     return res
 
 
@@ -115,8 +112,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("inputs", nargs="*", help="mp3 files or a work folder (default: work)")
-    ap.add_argument("--repeat", type=float, default=0.80, help="cosine similarity for REPEAT (default 0.80)")
-    ap.add_argument("--suspect", type=float, default=0.70, help="lower bound for SUSPECT (default 0.70)")
+    ap.add_argument("--repeat", type=float, default=0.72, help="stripe similarity for REPEAT (default 0.72)")
+    ap.add_argument("--suspect", type=float, default=0.64, help="lower bound for SUSPECT (default 0.64)")
     ap.add_argument("--silence-db", type=float, default=-60, help="deep silence level in dB (default -60)")
     ap.add_argument("--silence-min", type=float, default=0.25, help="min silence length in s (default 0.25)")
     args = ap.parse_args()
@@ -143,9 +140,11 @@ def main():
         status = "REPEAT" if r["repeat"] else ("suspect" if r["suspect"] else "clean")
         print(f"{f.name}  {r['duration']:.1f}s  {status}")
         for h in r["repeat"]:
-            print(f"   REPEAT   {h['a0']:.1f}-{h['a1'] + WIN_S:.1f}s  again at {h['b0']:.1f}-{h['b1'] + WIN_S:.1f}s  (sim {h['sim']:.2f})")
+            a0, a1 = h["t0"], h["t1"] + WIN_S
+            print(f"   REPEAT   {a0:.1f}-{a1:.1f}s  said again at {a0 + h['lag']:.1f}-{a1 + h['lag']:.1f}s  (sim {h['sim']:.2f})")
         for h in r["suspect"]:
-            print(f"   suspect  {h['a0']:.1f}-{h['a1'] + WIN_S:.1f}s  vs {h['b0']:.1f}-{h['b1'] + WIN_S:.1f}s  (sim {h['sim']:.2f}) listen to it")
+            a0, a1 = h["t0"], h["t1"] + WIN_S
+            print(f"   suspect  {a0:.1f}-{a1:.1f}s  vs {a0 + h['lag']:.1f}-{a1 + h['lag']:.1f}s  (sim {h['sim']:.2f}) listen to it")
         sil = silences(f, args.silence_db, args.silence_min)
         if sil:
             print("   deep silences (cut candidates): " + ", ".join(

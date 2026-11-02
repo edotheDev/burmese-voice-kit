@@ -3,8 +3,8 @@
 ## Every paragraph, every time
 
 1. Scan every paragraph for repeats: `python scripts/scan_repeats.py work`.
-   - REPEAT (similarity above 0.80): almost always a real loop or doubled phrase.
-   - suspect (0.70 to 0.80 at a sentence-length offset): the script's own repeated words score around 0.75, so suspects need ears.
+   - REPEAT (similarity 0.72 or more): almost always a real loop or doubled phrase. Real loops in v4 Burmese takes scored 0.80 to 0.83.
+   - suspect (0.64 to 0.72): clean takes scored up to 0.62, so a suspect needs your ears. A phrase the script really says twice also shows up here.
 2. Check every paragraph's transcript: `python scripts/check_transcript.py`. Never skip it. In one real run, 3 of 11 short paragraphs still had a dropped word, a wrong first word, or a number misread. The scan cannot catch those.
    - Scribe is only "Good" on Burmese, so a flag is a pointer, not a verdict. A pass is not proof.
    - Do not use Whisper for Burmese. It is useless for it.

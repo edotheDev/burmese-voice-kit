@@ -78,7 +78,7 @@ def main():
     ap.add_argument("--model", default=MODEL_ID)
     ap.add_argument("--language-code", default="mya", help='Burmese code (default "mya")')
     ap.add_argument("--retries", type=int, default=4)
-    ap.add_argument("--reuse", action="store_true", help="reuse saved transcripts instead of calling the API")
+    ap.add_argument("--reuse", action="store_true", help="use saved transcripts in work/transcripts/pNN.txt (e.g. made with an ElevenLabs connection) instead of calling the API")
     args = ap.parse_args()
     for s in (sys.stdout, sys.stderr):
         try:
@@ -108,6 +108,9 @@ def main():
         tfile = tdir / f"{pid}.txt"
         if args.reuse and tfile.exists():
             heard = tfile.read_text(encoding="utf-8")
+        elif not key:
+            print(f"{pid}  no saved transcript at {tfile}, skipped")
+            continue
         else:
             try:
                 heard = transcribe(session, key, mp3, args)
